@@ -209,7 +209,7 @@ if ( !class_exists("WP_CarDealer") ) {
 
 		public static function plugin_update() {
 	        require_once WP_CARDEALER_PLUGIN_DIR . 'libraries/plugin-update-checker/plugin-update-checker.php';
-	        Puc_v4_Factory::buildUpdateChecker(
+	        \YahnisElsts\PluginUpdateChecker\v5\PucFactory::buildUpdateChecker(
 	            'https://www.apusthemes.com/themeplugins/wp-cardealer.json',
 	            __FILE__,
 	            'wp-cardealer'
