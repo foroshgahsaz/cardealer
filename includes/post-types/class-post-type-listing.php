@@ -156,21 +156,11 @@ class WP_CarDealer_Post_Type_Car {
 			if ( !empty($_POST[self::$prefix . 'posted_by']) ) {
 				$post_args['post_author'] = $_POST[self::$prefix . 'posted_by'];
 			}
-			
-			if ( isset($_POST[self::$prefix . 'featured']) ) {
-				if ( !empty($_POST[self::$prefix . 'featured']) ) {
-					$menu_order = -1;
-				} else {
-					$menu_order = 0;
-				}
+
+			if ( !empty($_POST[self::$prefix . 'featured']) ) {
+				$menu_order = -1;
 			} else {
-				$featured = get_post_meta( $post_id, self::$prefix. 'featured', true );
-				
-				if ( $featured == 'on' ) {
-					$menu_order = -1;
-				} else {
-					$menu_order = 0;
-				}
+				$menu_order = 0;
 			}
 
 			$post_args['menu_order'] = apply_filters('wp-cardealer-listing-set-menu-order', $menu_order, $post_id);
@@ -507,6 +497,21 @@ class WP_CarDealer_Post_Type_Car {
 				  	'value_field' => 'slug'
 				);
 				wp_dropdown_categories($tax_args);
+			}
+
+			if ( $meta_obj->check_post_meta_exist('location') ) {
+				$selected = isset($_GET['listing_location']) ? $_GET['listing_location'] : '';
+				$tax_args = array(
+					'taxonomy'     => 'listing_location',
+					'orderby'      => 'name',
+					'show_count'   => 1,
+					'hierarchical' => 1,
+					'name'         => 'listing_location',
+					'selected'     => $selected,
+					'show_option_all' => 'همه موقعیت‌ها',
+					'value_field'  => 'slug',
+				);
+				wp_dropdown_categories( $tax_args );
 			}
 
 			if ( $meta_obj->check_post_meta_exist('model') ) {

@@ -50,6 +50,14 @@
             // mixes
             self.mixesFn();
 
+            self.convertNavasanPrices();
+
+            if ( typeof elementorFrontend !== 'undefined' ) {
+                elementorFrontend.hooks.addAction( 'frontend/element_ready/global', function() {
+                    self.convertNavasanPrices();
+                } );
+            }
+
             self.loadExtension();
         },
         loadExtension: function() {
@@ -813,6 +821,10 @@
                         slide: function( event, ui ) {
                             var $from_price = ui.values[ 0 ];
                             var $to_price = ui.values[ 1 ];
+                            if ( wp_cardealer_opts.enable_usd_to_toman === 'yes' && wp_cardealer_opts.usd_to_toman_rate ) {
+                                $from_price = $from_price * wp_cardealer_opts.usd_to_toman_rate;
+                                $to_price = $to_price * wp_cardealer_opts.usd_to_toman_rate;
+                            }
                             if ( wp_cardealer_opts.enable_multi_currencies === 'yes' ) {
                                 $from_price = self.shortenNumber($from_price);
                                 $to_price = self.shortenNumber($to_price);
@@ -1160,19 +1172,74 @@
                 $(this).closest('form').trigger('submit');
             });
         },
+        convertNavasanPrices: function() {
+            if ( wp_cardealer_opts.enable_usd_to_toman !== 'yes' || wp_cardealer_opts.navasan_client_convert !== 'yes' || ! wp_cardealer_opts.usd_to_toman_rate ) {
+                return;
+            }
+
+            var self = this;
+            var rate = parseFloat( wp_cardealer_opts.usd_to_toman_rate );
+            var symbol = wp_cardealer_opts.navasan_toman_symbol || 'تومان';
+            var position = wp_cardealer_opts.navasan_currency_position || 'after_space';
+            var sym = '<span class="suffix">' + symbol + '</span>';
+
+            $( '.wpcd-usd-price' ).each( function() {
+                var $el = $( this );
+                var usd = parseFloat( $el.data( 'wpcd-usd' ) );
+
+                if ( ! usd || isNaN( usd ) || ! rate ) {
+                    return;
+                }
+
+                var toman = Math.round( usd * rate );
+                var formatted;
+
+                if ( wp_cardealer_opts.enable_shorten_long_number === 'yes' ) {
+                    formatted = self.shortenNumber( toman );
+                } else {
+                    formatted = self.addCommas( toman );
+                }
+
+                var html = '';
+                switch ( position ) {
+                    case 'before':
+                        html = sym + '<span class="price-text">' + formatted + '</span>';
+                        break;
+                    case 'after':
+                        html = '<span class="price-text">' + formatted + '</span>' + sym;
+                        break;
+                    case 'before_space':
+                        html = sym + ' <span class="price-text">' + formatted + '</span>';
+                        break;
+                    default:
+                        html = '<span class="price-text">' + formatted + '</span> ' + sym;
+                }
+
+                $el.html( html ).removeClass( 'wpcd-usd-price' ).addClass( 'wpcd-toman-price' );
+            } );
+        },
         shortenNumber: function($number) {
             var self = this;
-            
-            var divisors = wp_cardealer_opts.divisors;
 
+            var divisors = wp_cardealer_opts.divisors || {};
+            var shortened = null;
+
+            // Returning a value from an $.each callback does not return from the
+            // enclosing function, and only false stops the walk, so the previous
+            // version kept dividing and then returned the bare number.
             $.each(divisors, function( $index, $value ) {
-                if ($number < ($value['divisor'] * 1000)) {
-                    $number = $number / $value['divisor'];
-                    return self.addCommas($number) + $value['key'];
+                if ( Math.abs($number) < ($value['divisor'] * 1000) ) {
+                    var divided = $number / $value['divisor'];
+                    var fraction = divided - Math.floor( divided );
+                    var display = fraction >= 0.01
+                        ? Math.round( divided * 100 ) / 100
+                        : Math.round( divided );
+                    shortened = self.addCommas( display ) + $value['key'];
+                    return false;
                 }
             });
 
-            return $number;
+            return shortened !== null ? shortened : self.addCommas($number);
         },
         addCommas: function(str) {
             var parts = (str + "").split("."),

@@ -40,6 +40,60 @@ class WP_CarDealer_Listing {
 	public static function get_post_meta($post_id, $key, $single = true) {
 		return get_post_meta($post_id, WP_CARDEALER_LISTING_PREFIX.$key, $single);
 	}
+
+	/**
+	 * Formatted listing price. Themes call this helper; conversion to Toman
+	 * happens inside the price formatter so theme files do not need changes.
+	 *
+	 * @param int $post_id
+	 * @return string|false
+	 */
+	public static function get_price_html( $post_id ) {
+		$obj = WP_CarDealer_Listing_Meta::get_instance( $post_id );
+		return $obj->get_price_html();
+	}
+
+	/**
+	 * Import cost row for Elementor or theme hooks.
+	 *
+	 * @param int $post_id
+	 * @return string
+	 */
+	public static function get_fees_html( $post_id ) {
+		if ( ! class_exists( 'WP_CarDealer_Price' ) ) {
+			return '';
+		}
+
+		return WP_CarDealer_Price::get_listing_fees_html( $post_id );
+	}
+
+	/**
+	 * Total cost (price + import) for Elementor or theme hooks.
+	 *
+	 * @param int $post_id
+	 * @return string
+	 */
+	public static function get_total_cost_html( $post_id ) {
+		if ( ! class_exists( 'WP_CarDealer_Price' ) ) {
+			return '';
+		}
+
+		return WP_CarDealer_Price::get_listing_total_cost_html( $post_id );
+	}
+
+	/**
+	 * Body paint / replacement diagram HTML.
+	 *
+	 * @param int $post_id
+	 * @return string
+	 */
+	public static function get_body_damage_html( $post_id ) {
+		if ( ! class_exists( 'WP_CarDealer_Listing_Body_Damage' ) ) {
+			return '';
+		}
+
+		return WP_CarDealer_Listing_Body_Damage::get_html( $post_id );
+	}
 	
 	// add product viewed
 	public static function track_listing_view() {

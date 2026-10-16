@@ -13,9 +13,632 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 class WP_CarDealer_Price {
 
+	/**
+	 * @var array|null
+	 */
+	private static $navasan_format_context = null;
+
+	/**
+	 * Per-request caches for helpers that are rebuilt on every rendered price.
+	 *
+	 * @var array|null
+	 */
+	private static $currencies_cache = null;
+
+	/**
+	 * @var array|null
+	 */
+	private static $currency_symbols_cache = null;
+
+	/**
+	 * @var array|null
+	 */
+	private static $currencies_settings_cache = null;
+
+	/**
+	 * @var array|null
+	 */
+	private static $shorten_divisors_cache = null;
+
+	/**
+	 * @var string|null
+	 */
+	private static $current_currency_cache = null;
+
+	/**
+	 * @var array|null
+	 */
+	private static $currency_display_context = null;
+
+	/**
+	 * Rendered price markup keyed by amount and formatting flags.
+	 *
+	 * @var array<string, bool|string>
+	 */
+	private static $formatted_prices = array();
+
+	const PRICE_CACHE_LIMIT = 5000;
+
+	/**
+	 * Drop the per-request caches. Used when settings change mid request.
+	 *
+	 * @return void
+	 */
+	public static function flush_runtime_cache() {
+		self::$navasan_format_context    = null;
+		self::$currencies_cache          = null;
+		self::$currency_symbols_cache    = null;
+		self::$currencies_settings_cache = null;
+		self::$shorten_divisors_cache    = null;
+		self::$current_currency_cache    = null;
+		self::$currency_display_context  = null;
+		self::$formatted_prices          = array();
+
+		if ( class_exists( 'WP_CarDealer_Mixes' ) ) {
+			WP_CarDealer_Mixes::flush_runtime_cache();
+		}
+	}
+
 	public static function init() {
 	    add_action( 'init', array( __CLASS__, 'process_currency' ) );
+	    add_action( 'update_option_wp_cardealer_settings', array( __CLASS__, 'flush_runtime_cache' ) );
+	    add_filter( 'wp_cardealer_profiler_report_lines', array( __CLASS__, 'add_profiler_context' ) );
 	}
+
+	/**
+	 * Report how many distinct amounts were rendered, which distinguishes a
+	 * widget repeating one amount from a loop feeding in many amounts.
+	 *
+	 * @param array $lines
+	 * @return array
+	 */
+	public static function add_profiler_context( $lines ) {
+		$keys    = array_keys( self::$formatted_prices );
+		$samples = array_slice( $keys, 0, 3 );
+
+		$lines[] = sprintf(
+			'price_keys distinct=%s samples=%s',
+			number_format( count( $keys ) ),
+			empty( $samples ) ? 'none' : implode( ',', $samples )
+		);
+
+		return $lines;
+	}
+
+	/**
+	 * Memoize Navasan formatting state for listing archives.
+	 *
+	 * @return array{display: bool, client_convert: bool, rate: float, symbol: string, currency_position: string}
+	 */
+	private static function get_navasan_format_context() {
+		if ( null !== self::$navasan_format_context ) {
+			return self::$navasan_format_context;
+		}
+
+		self::$navasan_format_context = array(
+			'display'            => false,
+			'client_convert'     => false,
+			'rate'               => 0.0,
+			'symbol'             => '',
+			'currency_position'  => 'after_space',
+		);
+
+		if ( ! class_exists( 'WP_CarDealer_Navasan' ) || ! WP_CarDealer_Navasan::is_enabled() ) {
+			return self::$navasan_format_context;
+		}
+
+		$rate = WP_CarDealer_Navasan::get_usd_toman_rate();
+		if ( $rate <= 0 ) {
+			return self::$navasan_format_context;
+		}
+
+		$symbol     = WP_CarDealer_Navasan::get_toman_symbol();
+		$position   = wp_cardealer_get_option( 'navasan_currency_position', 'after_space' );
+
+		if ( WP_CarDealer_Navasan::use_client_side_conversion() ) {
+			self::$navasan_format_context = array(
+				'display'           => false,
+				'client_convert'    => true,
+				'rate'              => $rate,
+				'symbol'            => $symbol,
+				'currency_position' => $position,
+			);
+
+			return self::$navasan_format_context;
+		}
+
+		self::$navasan_format_context = array(
+			'display'           => true,
+			'client_convert'    => false,
+			'rate'              => $rate,
+			'symbol'            => $symbol,
+			'currency_position' => $position,
+		);
+
+		return self::$navasan_format_context;
+	}
+
+	/**
+	 * Symbol, position and decimal settings for the active currency.
+	 *
+	 * These depend only on saved settings and the visitor's chosen currency, so
+	 * they are resolved once instead of on every rendered price.
+	 *
+	 * @return array{symbol: string, currency_position: string, decimals: bool, money_decimals: mixed, rate_exchange_fee: float, shorten_long_number: bool}
+	 */
+	private static function get_currency_display_context() {
+		if ( null !== self::$currency_display_context ) {
+			return self::$currency_display_context;
+		}
+
+		$context = array(
+			'symbol'              => '',
+			'currency_position'   => 'before',
+			'decimals'            => false,
+			'money_decimals'      => wp_cardealer_get_option( 'money_decimals' ),
+			'rate_exchange_fee'   => 1,
+			'shorten_long_number' => wp_cardealer_get_option( 'enable_shorten_long_number', 'no' ) === 'yes',
+		);
+
+		$currency_args = array();
+		if ( wp_cardealer_get_option( 'enable_multi_currencies' ) === 'yes' ) {
+			$multi_currencies = self::get_currencies_settings();
+			$current_currency = self::get_current_currency();
+
+			if ( ! empty( $multi_currencies[ $current_currency ] ) ) {
+				$currency_args = $multi_currencies[ $current_currency ];
+			}
+		}
+
+		if ( ! empty( $currency_args ) ) {
+			$context['symbol'] = ! empty( $currency_args['custom_symbol'] )
+				? $currency_args['custom_symbol']
+				: self::currency_symbol( isset( $currency_args['currency'] ) ? $currency_args['currency'] : '' );
+
+			$context['currency_position'] = ! empty( $currency_args['currency_position'] ) ? $currency_args['currency_position'] : 'before';
+			$context['rate_exchange_fee'] = ! empty( $currency_args['rate_exchange_fee'] ) ? $currency_args['rate_exchange_fee'] : 1;
+			$context['decimals']          = true;
+			$context['money_decimals']    = ! empty( $currency_args['money_decimals'] ) ? $currency_args['money_decimals'] : 1;
+
+			self::$currency_display_context = $context;
+
+			return self::$currency_display_context;
+		}
+
+		$symbol = wp_cardealer_get_option( 'custom_symbol', '$' );
+		if ( empty( $symbol ) ) {
+			$symbol = self::currency_symbol( wp_cardealer_get_option( 'currency', 'USD' ) );
+		}
+
+		$context['symbol']            = $symbol;
+		$context['currency_position'] = wp_cardealer_get_option( 'currency_position', 'before' );
+
+		self::$currency_display_context = $context;
+
+		return self::$currency_display_context;
+	}
+
+	/**
+	 * Extra listing costs entered in USD and converted to Toman like the price.
+	 *
+	 * @return array meta_key_suffix => label
+	 */
+	public static function get_listing_fee_fields() {
+		return array(
+			'import_fee' => 'هزینه واردات',
+		);
+	}
+
+	/**
+	 * Meta suffixes kept only for reading legacy listings.
+	 *
+	 * @return array<int, string>
+	 */
+	public static function get_legacy_listing_fee_suffixes() {
+		return array( 'customs_fee', 'shipping_fee' );
+	}
+
+	/**
+	 * @param string $field_id Full meta key, e.g. _listing_customs_fee
+	 * @return bool
+	 */
+	public static function is_listing_fee_field( $field_id ) {
+		if ( ! defined( 'WP_CARDEALER_LISTING_PREFIX' ) ) {
+			return false;
+		}
+
+		foreach ( array_keys( self::get_listing_fee_fields() ) as $suffix ) {
+			if ( $field_id === WP_CARDEALER_LISTING_PREFIX . $suffix ) {
+				return true;
+			}
+		}
+
+		foreach ( self::get_legacy_listing_fee_suffixes() as $suffix ) {
+			if ( $field_id === WP_CARDEALER_LISTING_PREFIX . $suffix ) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	/**
+	 * Normalize a USD amount from admin/frontend input.
+	 *
+	 * @param mixed $value
+	 * @return string Empty string or a numeric string in USD.
+	 */
+	public static function sanitize_usd_amount( $value ) {
+		if ( is_array( $value ) ) {
+			$value = reset( $value );
+		}
+
+		if ( $value === null || $value === false ) {
+			return '';
+		}
+
+		$value = trim( (string) $value );
+		if ( $value === '' ) {
+			return '';
+		}
+
+		$persian = array( '۰', '۱', '۲', '۳', '۴', '۵', '۶', '۷', '۸', '۹' );
+		$arabic  = array( '٠', '١', '٢', '٣', '٤', '٥', '٦', '٧', '٨', '٩' );
+		$latin   = array( '0', '1', '2', '3', '4', '5', '6', '7', '8', '9' );
+		$value   = str_replace( $persian, $latin, $value );
+		$value   = str_replace( $arabic, $latin, $value );
+		$value   = str_replace( array( ',', '٬', '،', ' ' ), '', $value );
+		if ( strpos( $value, '-' ) !== false ) {
+			return '';
+		}
+		$value   = preg_replace( '/[^\d.]/', '', $value );
+
+		if ( $value === '' || ! is_numeric( $value ) ) {
+			return '';
+		}
+
+		$number = (float) $value;
+		if ( $number < 0 ) {
+			return '';
+		}
+
+		if ( floor( $number ) == $number ) {
+			return (string) (int) $number;
+		}
+
+		return (string) $number;
+	}
+
+	/**
+	 * @deprecated Use sanitize_usd_amount()
+	 * @param mixed $value
+	 * @return string
+	 */
+	public static function sanitize_toman_fee( $value ) {
+		return self::sanitize_usd_amount( $value );
+	}
+
+	/**
+	 * Format an amount that is already in Toman. Never runs USD conversion.
+	 *
+	 * @param mixed $amount
+	 * @param bool  $show_zero When true, empty or invalid amounts render as 0.
+	 * @return string
+	 */
+	public static function format_toman_amount( $amount, $show_zero = false ) {
+		if ( $amount === '' || $amount === null || ! is_numeric( $amount ) ) {
+			if ( ! $show_zero ) {
+				return '';
+			}
+			$amount = 0;
+		}
+
+		$amount = (float) $amount;
+		if ( $amount < 0 ) {
+			if ( ! $show_zero ) {
+				return '';
+			}
+			$amount = 0;
+		}
+
+		if ( $amount == 0 && ! $show_zero ) {
+			return '';
+		}
+
+		if ( class_exists( 'WP_CarDealer_Mixes' ) ) {
+			$formatted = WP_CarDealer_Mixes::format_number( $amount, false, 0 );
+		} else {
+			$formatted = number_format( $amount, 0, '.', ',' );
+		}
+
+		$symbol = 'تومان';
+		if ( class_exists( 'WP_CarDealer_Navasan' ) ) {
+			$symbol = WP_CarDealer_Navasan::get_toman_symbol();
+		}
+
+		return '<span class="price-text">' . $formatted . '</span> <span class="suffix">' . $symbol . '</span>';
+	}
+
+	/**
+	 * HTML for customs/shipping rows under the converted listing price.
+	 * Empty fees still render as 0 تومان.
+	 *
+	 * @param int $post_id
+	 * @return string
+	 */
+	/**
+	 * @param int    $post_id
+	 * @param string $suffix customs_fee|shipping_fee
+	 * @return string
+	 */
+	public static function get_listing_fee_value( $post_id, $suffix ) {
+		$post_id = absint( $post_id );
+		if ( ! $post_id ) {
+			return '';
+		}
+
+		if ( 'import_fee' === $suffix ) {
+			return self::resolve_listing_import_fee_usd( $post_id );
+		}
+
+		if ( in_array( $suffix, self::get_legacy_listing_fee_suffixes(), true ) ) {
+			$prefix = WP_CARDEALER_LISTING_PREFIX;
+			$import = get_post_meta( $post_id, $prefix . 'import_fee', true );
+			if ( $import !== '' && is_numeric( $import ) ) {
+				return '';
+			}
+
+			$value = get_post_meta( $post_id, $prefix . $suffix, true );
+
+			return ( $value !== '' && is_numeric( $value ) ) ? (string) $value : '';
+		}
+
+		if ( ! isset( self::get_listing_fee_fields()[ $suffix ] ) ) {
+			return '';
+		}
+
+		return (string) get_post_meta( $post_id, WP_CARDEALER_LISTING_PREFIX . $suffix, true );
+	}
+
+	/**
+	 * Stored import fee in USD, or the sum of legacy customs/shipping rows.
+	 *
+	 * @param int $post_id
+	 * @return string
+	 */
+	public static function resolve_listing_import_fee_usd( $post_id ) {
+		$post_id = absint( $post_id );
+		if ( ! $post_id ) {
+			return '';
+		}
+
+		$prefix = WP_CARDEALER_LISTING_PREFIX;
+		$import = get_post_meta( $post_id, $prefix . 'import_fee', true );
+
+		if ( $import !== '' && is_numeric( $import ) ) {
+			return self::normalize_usd_amount_string( (float) $import );
+		}
+
+		$legacy_total = 0.0;
+		foreach ( self::get_legacy_listing_fee_suffixes() as $suffix ) {
+			$value = get_post_meta( $post_id, $prefix . $suffix, true );
+			if ( $value !== '' && is_numeric( $value ) ) {
+				$legacy_total += (float) $value;
+			}
+		}
+
+		if ( $legacy_total <= 0 ) {
+			return '';
+		}
+
+		return self::normalize_usd_amount_string( $legacy_total );
+	}
+
+	/**
+	 * @param float $amount
+	 * @return string
+	 */
+	private static function normalize_usd_amount_string( $amount ) {
+		if ( $amount < 0 ) {
+			return '';
+		}
+
+		if ( floor( $amount ) == $amount ) {
+			return (string) (int) $amount;
+		}
+
+		return (string) $amount;
+	}
+
+	/**
+	 * Formatted Toman HTML for one fee field (stored in USD, shown in Toman).
+	 *
+	 * @param int    $post_id
+	 * @param string $suffix customs_fee|shipping_fee
+	 * @param bool   $show_zero
+	 * @return string
+	 */
+	public static function get_listing_fee_formatted( $post_id, $suffix, $show_zero = true ) {
+		$value = self::get_listing_fee_value( $post_id, $suffix );
+
+		if ( $value === '' || ! is_numeric( $value ) ) {
+			if ( ! $show_zero ) {
+				return '';
+			}
+			$value = 0;
+		}
+
+		$formatted = self::format_price( $value, $show_zero );
+
+		return $formatted ? $formatted : '';
+	}
+
+	/**
+	 * Fee row with a visible label prefix, e.g. "هزینه گمرک : ۱۰۷,۰۰۰,۰۰۰ تومان".
+	 *
+	 * @param int    $post_id
+	 * @param string $suffix customs_fee|shipping_fee
+	 * @param bool   $show_zero
+	 * @return string
+	 */
+	public static function get_listing_fee_labeled_html( $post_id, $suffix, $show_zero = true ) {
+		$labels = self::get_listing_fee_fields();
+		if ( ! isset( $labels[ $suffix ] ) ) {
+			return '';
+		}
+
+		$formatted = self::get_listing_fee_formatted( $post_id, $suffix, $show_zero );
+		if ( $formatted === '' ) {
+			return '';
+		}
+
+		return '<span class="listing-price-extra listing-price-extra--' . esc_attr( $suffix ) . '">'
+			. '<span class="listing-price-extra-label">' . esc_html( $labels[ $suffix ] ) . ' : </span>'
+			. '<span class="listing-price-extra-value">' . $formatted . '</span>'
+			. '</span>';
+	}
+
+	/**
+	 * Plain-text fee for Elementor text widgets (no HTML spans).
+	 *
+	 * @param int    $post_id
+	 * @param string $suffix customs_fee|shipping_fee
+	 * @param bool   $show_zero
+	 * @return string
+	 */
+	public static function get_listing_fee_plain( $post_id, $suffix, $show_zero = true, $with_label = false ) {
+		$html = self::get_listing_fee_formatted( $post_id, $suffix, $show_zero );
+		if ( $html === '' ) {
+			return '';
+		}
+
+		$plain = trim( preg_replace( '/\s+/', ' ', strip_tags( str_replace( '&nbsp;', ' ', $html ) ) ) );
+
+		if ( ! $with_label ) {
+			return $plain;
+		}
+
+		$labels = self::get_listing_fee_fields();
+		if ( ! isset( $labels[ $suffix ] ) ) {
+			return $plain;
+		}
+
+		return $labels[ $suffix ] . ' : ' . $plain;
+	}
+
+	public static function get_listing_fees_html( $post_id ) {
+		$post_id = absint( $post_id );
+		if ( ! $post_id ) {
+			return '';
+		}
+
+		$rows = array();
+		foreach ( self::get_listing_fee_fields() as $suffix => $label ) {
+			$row = self::get_listing_fee_labeled_html( $post_id, $suffix, true );
+			if ( $row !== '' ) {
+				$rows[] = $row;
+			}
+		}
+
+		return '<div class="listing-price-extras">' . implode( '', $rows ) . '</div>';
+	}
+
+	/**
+	 * USD amount for one fee field. Empty meta counts as zero.
+	 *
+	 * @param int    $post_id
+	 * @param string $suffix customs_fee|shipping_fee
+	 * @return float
+	 */
+	public static function get_listing_fee_usd( $post_id, $suffix ) {
+		$value = self::get_listing_fee_value( $post_id, $suffix );
+
+		if ( $value === '' || ! is_numeric( $value ) ) {
+			return 0.0;
+		}
+
+		$amount = (float) $value;
+
+		return $amount > 0 ? $amount : 0.0;
+	}
+
+	/**
+	 * Sum of listing price plus import cost, all in USD.
+	 *
+	 * @param int $post_id
+	 * @return float
+	 */
+	public static function get_listing_total_usd( $post_id ) {
+		$post_id = absint( $post_id );
+		if ( ! $post_id ) {
+			return 0.0;
+		}
+
+		if ( class_exists( 'WP_CarDealer_Navasan' ) ) {
+			$price = WP_CarDealer_Navasan::get_stored_usd_price( $post_id );
+		} else {
+			$price = get_post_meta( $post_id, WP_CARDEALER_LISTING_PREFIX . 'price', true );
+		}
+
+		$total = is_numeric( $price ) ? (float) $price : 0.0;
+
+		foreach ( array_keys( self::get_listing_fee_fields() ) as $suffix ) {
+			$total += self::get_listing_fee_usd( $post_id, $suffix );
+		}
+
+		return $total;
+	}
+
+	/**
+	 * Formatted total cost HTML (price + import cost).
+	 *
+	 * @param int $post_id
+	 * @return string
+	 */
+	public static function get_listing_total_cost_formatted( $post_id ) {
+		$total_usd = self::get_listing_total_usd( $post_id );
+		if ( $total_usd <= 0 ) {
+			return '';
+		}
+
+		$formatted = self::format_price( $total_usd );
+
+		return $formatted ? $formatted : '';
+	}
+
+	/**
+	 * Plain-text total cost for Elementor text widgets.
+	 *
+	 * @param int $post_id
+	 * @return string
+	 */
+	public static function get_listing_total_cost_plain( $post_id ) {
+		$html = self::get_listing_total_cost_formatted( $post_id );
+		if ( $html === '' ) {
+			return '';
+		}
+
+		return trim( preg_replace( '/\s+/', ' ', strip_tags( str_replace( '&nbsp;', ' ', $html ) ) ) );
+	}
+
+	/**
+	 * Labelled total cost row for Elementor or theme hooks.
+	 *
+	 * @param int $post_id
+	 * @return string
+	 */
+	public static function get_listing_total_cost_html( $post_id ) {
+		$formatted = self::get_listing_total_cost_formatted( $post_id );
+		if ( $formatted === '' ) {
+			return '';
+		}
+
+		return '<div class="listing-total-cost">'
+			. '<span class="listing-total-cost-label">' . esc_html__( 'هزینه کل', 'wp-cardealer' ) . ' : </span>'
+			. '<span class="listing-total-cost-value">' . $formatted . '</span>'
+			. '</div>';
+	}
+
 	/**
 	 * Formats price
 	 *
@@ -24,57 +647,131 @@ class WP_CarDealer_Price {
 	 * @return bool|string
 	 */
 	public static function format_price( $price, $show_null = false, $without_rate_exchange = false ) {
+		$profiling = WP_CarDealer_Profiler::is_enabled();
+
+		if ( $profiling ) {
+			WP_CarDealer_Profiler::start( 'format_price' );
+			WP_CarDealer_Profiler::sample_caller( 'format_price' );
+		}
+
+		$key = self::get_price_cache_key( $price, $show_null, $without_rate_exchange );
+
+		if ( null !== $key && array_key_exists( $key, self::$formatted_prices ) ) {
+			if ( $profiling ) {
+				WP_CarDealer_Profiler::count( 'format_price_cache_hit' );
+				WP_CarDealer_Profiler::stop( 'format_price' );
+			}
+
+			return self::$formatted_prices[ $key ];
+		}
+
+		$rendered = self::render_price( $price, $show_null, $without_rate_exchange );
+
+		// The same amount renders identically all request long, and listing
+		// archives ask for the same handful of amounts over and over.
+		if ( null !== $key && count( self::$formatted_prices ) < self::PRICE_CACHE_LIMIT ) {
+			self::$formatted_prices[ $key ] = $rendered;
+		}
+
+		if ( $profiling ) {
+			WP_CarDealer_Profiler::stop( 'format_price' );
+		}
+
+		return $rendered;
+	}
+
+	/**
+	 * Ceiling for the price filter bounds.
+	 *
+	 * A single mistyped listing price sets the upper bound for the whole price
+	 * filter. Themes commonly build slider steps by walking from the lower to
+	 * the upper bound, so one bad row turns into an enormous loop.
+	 *
+	 * @return float
+	 */
+	public static function get_filter_price_ceiling() {
+		return (float) apply_filters( 'wp_cardealer_filter_price_ceiling', 100000000 );
+	}
+
+	/**
+	 * Clamp a price filter bound to the ceiling.
+	 *
+	 * @param mixed $max
+	 * @return float
+	 */
+	public static function clamp_filter_price_max( $max ) {
+		if ( ! is_numeric( $max ) ) {
+			return 0.0;
+		}
+
+		$max     = (float) $max;
+		$ceiling = self::get_filter_price_ceiling();
+
+		if ( $ceiling <= 0 || $max <= $ceiling ) {
+			return $max;
+		}
+
+		return $ceiling;
+	}
+
+	/**
+	 * Cache key for a formatted price, or null when the input cannot be keyed.
+	 *
+	 * @param mixed $price
+	 * @param bool  $show_null
+	 * @param bool  $without_rate_exchange
+	 * @return string|null
+	 */
+	private static function get_price_cache_key( $price, $show_null, $without_rate_exchange ) {
+		if ( is_array( $price ) || is_object( $price ) ) {
+			return null;
+		}
+
+		return $price . '|' . ( $show_null ? '1' : '0' ) . '|' . ( $without_rate_exchange ? '1' : '0' );
+	}
+
+	/**
+	 * @param mixed $price
+	 * @param bool  $show_null
+	 * @param bool  $without_rate_exchange
+	 * @return bool|string
+	 */
+	private static function render_price( $price, $show_null = false, $without_rate_exchange = false ) {
 		if ( empty( $price ) || ! is_numeric( $price ) ) {
 			if ( !$show_null ) {
 				return false;
 			}
 			$price = 0;
 		}
-		$decimals = false;
-		$money_decimals = wp_cardealer_get_option('money_decimals');
 
-		if ( wp_cardealer_get_option('enable_multi_currencies') === 'yes' ) {
-			$current_currency = self::get_current_currency();
-			$multi_currencies = self::get_currencies_settings();
+		$navasan = self::get_navasan_format_context();
+		$navasan_rate = $navasan['rate'];
+		$navasan_display = $navasan['display'];
+		$client_convert = ! empty( $navasan['client_convert'] );
+		$usd_source = (float) $price;
 
-			if ( !empty($multi_currencies) && !empty($multi_currencies[$current_currency]) ) {
-				$currency_args = $multi_currencies[$current_currency];
-			}
+		if ( $navasan_display && ! $without_rate_exchange ) {
+			$price = WP_CarDealer_Navasan::convert_amount( $price, $navasan_rate );
+		}
 
-			if ( !empty($currency_args) ) {
-				if ( !empty($currency_args['custom_symbol']) ) {
-					$symbol = $currency_args['custom_symbol'];
-				} else {
-					$currency = $currency_args['currency'];
-					$symbol = WP_CarDealer_Price::currency_symbol($currency);
-				}
-				$currency_position = !empty($currency_args['currency_position']) ? $currency_args['currency_position'] : 'before';
-				$rate_exchange_fee = !empty($currency_args['rate_exchange_fee']) ? $currency_args['rate_exchange_fee'] : 1;
-				$decimals = true;
-				$money_decimals = !empty($currency_args['money_decimals']) ? $currency_args['money_decimals'] : 1;
-				if ( !$without_rate_exchange ) {
-					$price = $price*$rate_exchange_fee;
-				}
-			} else {
-				$symbol = wp_cardealer_get_option('custom_symbol', '');
-				if ( empty($symbol) ) {
-					$currency = wp_cardealer_get_option('currency', 'USD');
-					$symbol = WP_CarDealer_Price::currency_symbol($currency);
-				}
-				$currency_position = wp_cardealer_get_option('currency_position', 'before');
-			}
-		} else {
-			$symbol = wp_cardealer_get_option('custom_symbol', '');
-			if ( empty($symbol) ) {
-				$currency = wp_cardealer_get_option('currency', 'USD');
-				$symbol = WP_CarDealer_Price::currency_symbol($currency);
-			}
-			$currency_position = wp_cardealer_get_option('currency_position', 'before');
+		$display = self::get_currency_display_context();
+		$decimals = $display['decimals'];
+		$money_decimals = $display['money_decimals'];
+		$symbol = $display['symbol'];
+		$currency_position = $display['currency_position'];
+
+		if ( $navasan_display ) {
+			$symbol = $navasan['symbol'];
+			$currency_position = $navasan['currency_position'];
+			$decimals = false;
+			$money_decimals = 0;
+		} elseif ( ! $without_rate_exchange && 1 != $display['rate_exchange_fee'] ) {
+			$price = $price * $display['rate_exchange_fee'];
 		}
 
 		$currency_symbol = ! empty( $symbol ) ? '<span class="suffix">'.$symbol.'</span>' : '<span class="suffix">$</span>';
 
-		if ( wp_cardealer_get_option('enable_shorten_long_number', 'no') === 'yes' ) {
+		if ( $display['shorten_long_number'] ) {
 			$price = self::number_shorten( $price, $decimals, $money_decimals );
 		} else {
 			$price = WP_CarDealer_Mixes::format_number( $price, $decimals, $money_decimals );
@@ -97,12 +794,26 @@ class WP_CarDealer_Price {
 			}
 		}
 
+		if ( $client_convert && ! $without_rate_exchange ) {
+			$price = '<span class="wpcd-usd-price" data-wpcd-usd="' . esc_attr( $usd_source ) . '">' . $price . '</span>';
+		}
+
 		return $price;
 	}
 
 	public static function convert_price_exchange( $price ) {
 		if ( empty( $price ) || ! is_numeric( $price ) ) {
 			$price = 0;
+		}
+		if ( class_exists( 'WP_CarDealer_Navasan' ) && WP_CarDealer_Navasan::is_enabled() ) {
+			// In client mode the browser converts, so nothing may be converted
+			// server side. Themes use this to size price sliders, and returning
+			// Toman there multiplies every stepped loop by the exchange rate.
+			if ( WP_CarDealer_Navasan::use_client_side_conversion() ) {
+				return $price;
+			}
+
+			return WP_CarDealer_Navasan::convert_usd_to_toman( $price );
 		}
 		if ( wp_cardealer_get_option('enable_multi_currencies') === 'yes' ) {
 			$current_currency = self::get_current_currency();
@@ -144,12 +855,19 @@ class WP_CarDealer_Price {
 	}
 
 	public static function get_current_currency() {
+		if ( null !== self::$current_currency_cache ) {
+			return self::$current_currency_cache;
+		}
+
 		if ( wp_cardealer_get_option('enable_multi_currencies') === 'yes' ) {
 			$current_currency = !empty($_COOKIE['wp_cardealer_currency']) ? $_COOKIE['wp_cardealer_currency'] : wp_cardealer_get_option('currency', 'USD');
 		} else {
 			$current_currency = wp_cardealer_get_option('currency', 'USD');
 		}
-		return $current_currency;
+
+		self::$current_currency_cache = $current_currency;
+
+		return self::$current_currency_cache;
 	}
 	/**
 	 * Get full list of currency codes.
@@ -159,6 +877,10 @@ class WP_CarDealer_Price {
 	 * @return array
 	 */
 	public static function get_currencies() {
+		if ( null !== self::$currencies_cache ) {
+			return self::$currencies_cache;
+		}
+
 		$currencies = array_unique(
 			apply_filters(
 				'wp-cardealer-currencies',
@@ -330,7 +1052,9 @@ class WP_CarDealer_Price {
 			)
 		);
 
-		return $currencies;
+		self::$currencies_cache = $currencies;
+
+		return self::$currencies_cache;
 	}
 
 	/**
@@ -342,6 +1066,9 @@ class WP_CarDealer_Price {
 	 * @return array
 	 */
 	public static function get_currency_symbols() {
+		if ( null !== self::$currency_symbols_cache ) {
+			return self::$currency_symbols_cache;
+		}
 
 		$symbols = apply_filters(
 			'wp-cardealer-currency-symbols',
@@ -513,7 +1240,9 @@ class WP_CarDealer_Price {
 			)
 		);
 
-		return $symbols;
+		self::$currency_symbols_cache = $symbols;
+
+		return self::$currency_symbols_cache;
 	}
 
 	/**
@@ -534,6 +1263,10 @@ class WP_CarDealer_Price {
 	}
 
 	public static function get_currencies_settings() {
+		if ( null !== self::$currencies_settings_cache ) {
+			return self::$currencies_settings_cache;
+		}
+
 		$currency = wp_cardealer_get_option('currency', 'USD');
 		$return = array(
 			$currency => array(
@@ -553,7 +1286,9 @@ class WP_CarDealer_Price {
 			}
 		}
 
-		return $return;
+		self::$currencies_settings_cache = $return;
+
+		return self::$currencies_settings_cache;
 	}
 
 	public static function number_shorten($number, $decimals = false, $money_decimals = 0 ) {
@@ -568,8 +1303,21 @@ class WP_CarDealer_Price {
 	    // lowest amount that matches
 	    foreach ($divisors as $key => $value) {
 	        if (abs($number) < ($value['divisor'] * 1000)) {
-	            $number = $number / $value['divisor'];
-	            return WP_CarDealer_Mixes::format_number($number, $decimals, $money_decimals) . $value['key'];
+	            $shortened = $number / $value['divisor'];
+	            $use_decimals = $decimals;
+	            $use_money_decimals = $money_decimals;
+
+	            // Totals like 1.22 billion were shown as "1 billion" because the
+	            // fractional unit was dropped. Keep up to two decimals when needed.
+	            if ( ! $use_decimals ) {
+	                $fraction = $shortened - floor( $shortened );
+	                if ( $fraction >= 0.01 ) {
+	                    $use_decimals = true;
+	                    $use_money_decimals = 2;
+	                }
+	            }
+
+	            return WP_CarDealer_Mixes::format_number( $shortened, $use_decimals, $use_money_decimals ) . $value['key'];
 	            break;
 	        }
 	    }
@@ -578,6 +1326,9 @@ class WP_CarDealer_Price {
 	}
 
 	public static function get_shorten_divisors() {
+		if ( null !== self::$shorten_divisors_cache ) {
+			return self::$shorten_divisors_cache;
+		}
 
         $divisors = array(
             '' => [
@@ -658,7 +1409,9 @@ class WP_CarDealer_Price {
             ];
         }
 
-	    return apply_filters('wp_cardealer_get_shorten_divisors', $divisors);
+	    self::$shorten_divisors_cache = apply_filters('wp_cardealer_get_shorten_divisors', $divisors);
+
+	    return self::$shorten_divisors_cache;
 	}
 
 	public static function process_currency() {

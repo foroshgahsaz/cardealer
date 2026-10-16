@@ -324,6 +324,61 @@ class WP_CarDealer_Abstract_Filter {
 		include WP_CarDealer_Template_Loader::locate( 'widgets/filter-fields/distance' );
 	}
 
+	/**
+	 * Markup of range filter fields, keyed by everything the template reads.
+	 *
+	 * A page builder can render the same filter widget thousands of times on one
+	 * page. The markup is identical every time, so it is built once.
+	 *
+	 * @var array<string, string>
+	 */
+	private static $range_field_markup = array();
+
+	/**
+	 * Report how many distinct range field signatures were built, which shows
+	 * whether the markup cache is being reused or defeated by a varying key.
+	 *
+	 * @param array $lines
+	 * @return array
+	 */
+	public static function add_profiler_context( $lines ) {
+		$keys = array_keys( self::$range_field_markup );
+
+		$lines[] = sprintf(
+			'range_field_keys distinct=%s sample=%s',
+			number_format( count( $keys ) ),
+			empty( $keys ) ? 'none' : reset( $keys )
+		);
+
+		return $lines;
+	}
+
+	/**
+	 * Signature covering every value the range slider templates read.
+	 *
+	 * @param string $template
+	 * @param string $key
+	 * @param string $name
+	 * @param array  $field
+	 * @param mixed  $min
+	 * @param mixed  $max
+	 * @return string
+	 */
+	private static function range_field_cache_key( $template, $key, $name, $field, $min, $max ) {
+		return implode(
+			'|',
+			array(
+				$template,
+				$key,
+				$name,
+				$min,
+				$max,
+				isset( $field['name'] ) ? $field['name'] : '',
+				! isset( $field['show_title'] ) || $field['show_title'] ? '1' : '0',
+			)
+		);
+	}
+
 	public static function filter_field_year_built_range_slider($instance, $args, $key, $field) {
 		$name = self::filter_get_name($key, $field);
 		$selected = !empty( $_GET[$name] ) ? $_GET[$name] : '';
@@ -338,7 +393,18 @@ class WP_CarDealer_Abstract_Filter {
 		if ( $min == $max ) {
 			return;
 		}
+
+		$cache_key = self::range_field_cache_key( 'year_built', $key, $name, $field, $min, $max );
+		if ( isset( self::$range_field_markup[ $cache_key ] ) ) {
+			echo self::$range_field_markup[ $cache_key ];
+			return;
+		}
+
+		ob_start();
 		include WP_CarDealer_Template_Loader::locate( 'widgets/filter-fields/range_slider' );
+		self::$range_field_markup[ $cache_key ] = ob_get_clean();
+
+		echo self::$range_field_markup[ $cache_key ];
 	}
 
 	public static function filter_field_listing_price($instance, $args, $key, $field) {
@@ -353,11 +419,28 @@ class WP_CarDealer_Abstract_Filter {
 		$min = $max = 0;
 		//$min = $price_min->min < $price_max->min ? $price_min->min : $price_max->min;
 		$max = $price_min->max > $price_max->max ? $price_min->max : $price_max->max;
-		
+		$max = WP_CarDealer_Price::clamp_filter_price_max( $max );
+
 		if ( $min >= $max ) {
 			return;
 		}
-		include WP_CarDealer_Template_Loader::locate( 'widgets/filter-fields/price_range_slider' );
+
+		$cache_key = self::range_field_cache_key( 'listing_price', $key, $name, $field, $min, $max );
+		if ( isset( self::$range_field_markup[ $cache_key ] ) ) {
+			echo self::$range_field_markup[ $cache_key ];
+			return;
+		}
+
+		$template = apply_filters(
+			'wp_cardealer_price_range_slider_template',
+			WP_CarDealer_Template_Loader::locate_plugin( 'widgets/filter-fields/price_range_slider' )
+		);
+
+		ob_start();
+		include $template;
+		self::$range_field_markup[ $cache_key ] = ob_get_clean();
+
+		echo self::$range_field_markup[ $cache_key ];
 	}
 
 	public static function filter_field_checkbox($instance, $args, $key, $field) {
@@ -372,8 +455,8 @@ class WP_CarDealer_Abstract_Filter {
 		$selected = !empty( $_GET[$name] ) ? $_GET[$name] : '';
 		$options = array();
 		if ( !empty($field['options']) ) {
-			foreach ($field['options'] as $k => $value) {
-				$options[] = array('value' => $k, 'text' => $value);
+			foreach ($field['options'] as $key => $value) {
+				$options[] = array('value' => $key, 'text' => $value);
 			}
 		}
 		include WP_CarDealer_Template_Loader::locate( 'widgets/filter-fields/select' );
@@ -655,7 +738,18 @@ class WP_CarDealer_Abstract_Filter {
 		if ( $min == $max ) {
 			return;
 		}
+
+		$cache_key = self::range_field_cache_key( 'range_' . $field['id'], $key, $name, $field, $min, $max );
+		if ( isset( self::$range_field_markup[ $cache_key ] ) ) {
+			echo self::$range_field_markup[ $cache_key ];
+			return;
+		}
+
+		ob_start();
 		include WP_CarDealer_Template_Loader::locate( 'widgets/filter-fields/range_slider' );
+		self::$range_field_markup[ $cache_key ] = ob_get_clean();
+
+		echo self::$range_field_markup[ $cache_key ];
 	}
 
 	public static function filter_field_number_select($instance, $args, $key, $field) {
@@ -783,3 +877,5 @@ class WP_CarDealer_Abstract_Filter {
 		return $meta_query;
 	}
 }
+
+add_filter( 'wp_cardealer_profiler_report_lines', array( 'WP_CarDealer_Abstract_Filter', 'add_profiler_context' ) );

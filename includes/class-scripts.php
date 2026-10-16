@@ -128,8 +128,16 @@ class WP_CarDealer_Scripts {
 			'recaptcha_enable' => WP_CarDealer_Recaptcha::is_recaptcha_enabled(),
 			'divisors' => $divisors,
 			'enable_multi_currencies' => wp_cardealer_get_option('enable_multi_currencies'),
+			'enable_shorten_long_number' => wp_cardealer_get_option( 'enable_shorten_long_number', 'no' ),
+			'enable_usd_to_toman' => ( class_exists( 'WP_CarDealer_Navasan' ) && WP_CarDealer_Navasan::is_enabled() ) ? 'yes' : 'no',
+			'navasan_client_convert' => ( class_exists( 'WP_CarDealer_Navasan' ) && WP_CarDealer_Navasan::use_client_side_conversion() ) ? 'yes' : 'no',
+			'navasan_toman_symbol' => class_exists( 'WP_CarDealer_Navasan' ) ? WP_CarDealer_Navasan::get_toman_symbol() : '',
+			'navasan_currency_position' => wp_cardealer_get_option( 'navasan_currency_position', 'after_space' ),
+			'usd_to_toman_rate' => class_exists( 'WP_CarDealer_Navasan' ) ? WP_CarDealer_Navasan::get_usd_toman_rate() : 0,
 		));
 		wp_enqueue_script( 'wp-cardealer-main' );
+		wp_enqueue_style( 'wp-cardealer-listing-price', WP_CARDEALER_PLUGIN_URL . 'assets/css/listing-price.css', array(), WP_CARDEALER_PLUGIN_VERSION );
+		wp_enqueue_style( 'wp-cardealer-listing-body-damage', WP_CARDEALER_PLUGIN_URL . 'assets/css/listing-body-damage.css', array(), WP_CARDEALER_PLUGIN_VERSION );
 	}
 
 	/**
@@ -172,9 +180,14 @@ class WP_CarDealer_Scripts {
 		wp_enqueue_style( 'wp-color-picker' );
 		wp_register_script( 'wp-cardealer-admin-main', WP_CARDEALER_PLUGIN_URL . 'assets/admin/admin-main.js', array( 'jquery' ), '1.0.0', true );
 		wp_localize_script( 'wp-cardealer-admin-main', 'wp_cardealer_opts', array(
-			'ajaxurl' => admin_url( 'admin-ajax.php' )
+			'ajaxurl' => admin_url( 'admin-ajax.php' ),
+			'navasan_nonce' => wp_create_nonce( 'wp_cardealer_navasan_test' ),
+			'navasan_testing' => 'در حال آزمایش اتصال وب‌سرویس...',
+			'speed_probe_nonce' => class_exists( 'WP_CarDealer_Speed_Probe' ) ? wp_create_nonce( WP_CarDealer_Speed_Probe::NONCE_ACTION ) : '',
 		));
 		wp_enqueue_script( 'wp-cardealer-admin-main' );
+		wp_enqueue_style( 'wp-cardealer-listing-price', WP_CARDEALER_PLUGIN_URL . 'assets/css/listing-price.css', array(), WP_CARDEALER_PLUGIN_VERSION );
+		wp_enqueue_style( 'wp-cardealer-listing-body-damage', WP_CARDEALER_PLUGIN_URL . 'assets/css/listing-body-damage.css', array(), WP_CARDEALER_PLUGIN_VERSION );
 	}
 
 }

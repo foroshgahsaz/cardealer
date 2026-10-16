@@ -92,32 +92,65 @@ class WP_CarDealer_Listing_Meta {
 	}
 	
 	public function get_price_html() {
-		$price_custom = $this->get_post_meta( 'price_custom' );
-		if ( $price_custom ) {
-			return apply_filters( 'wp-cardealer-get-price-html', $price_custom, $this->post_id, $this );
+		if ( ! WP_CarDealer_Profiler::is_enabled() ) {
+			return $this->render_price_html();
 		}
-		$price = $this->get_post_meta( 'price' );
 
-		if ( empty( $price ) || ! is_numeric( $price ) ) {
+		WP_CarDealer_Profiler::start( 'get_price_html' );
+		$rendered = $this->render_price_html();
+		WP_CarDealer_Profiler::stop( 'get_price_html' );
+
+		return $rendered;
+	}
+
+	/**
+	 * @return bool|string
+	 */
+	private function render_price_html() {
+		$price_html = '';
+		$price_custom = $this->get_post_meta( 'price_custom' );
+
+		if ( $price_custom ) {
+			$price_html = $price_custom;
+		} else {
+			$price = class_exists( 'WP_CarDealer_Navasan' )
+				? WP_CarDealer_Navasan::get_stored_usd_price( $this->post_id )
+				: $this->get_post_meta( 'price' );
+
+			if ( ! empty( $price ) && is_numeric( $price ) ) {
+				$formatted = WP_CarDealer_Price::format_price( $price );
+				if ( $formatted ) {
+					$price_html = $formatted;
+					$price_prefix = $this->get_post_meta( 'price_prefix' );
+					$price_suffix = $this->get_post_meta( 'price_suffix' );
+					if ( $price_prefix ) {
+						$price_html = '<span class="prefix-text additional-text">' . $price_prefix . '</span>' . $price_html;
+					}
+					if ( $price_suffix ) {
+						$price_html = $price_html . '<span class="suffix-text additional-text">' . $price_suffix . '</span>';
+					}
+				}
+			}
+		}
+
+		if ( class_exists( 'WP_CarDealer_Price' ) ) {
+			$fees_html = WP_CarDealer_Price::get_listing_fees_html( $this->post_id );
+			if ( $fees_html ) {
+				$price_html .= $fees_html;
+			}
+
+			$total_html = WP_CarDealer_Price::get_listing_total_cost_html( $this->post_id );
+			if ( $total_html ) {
+				$price_html .= $total_html;
+			}
+		}
+
+		if ( $price_html === '' ) {
 			return false;
 		}
 
-		$price = WP_CarDealer_Price::format_price( $price );
+		$price_html = '<div class="listing-price-stack">' . $price_html . '</div>';
 
-		$price_html = '';
-		if ( $price ) {
-			$price_html = $price;
-		}
-		if ( $price_html ) {
-			$price_prefix = $this->get_post_meta( 'price_prefix' );
-			$price_suffix = $this->get_post_meta( 'price_suffix' );
-			if ( $price_prefix ) {
-				$price_html = '<span class="prefix-text additional-text">'.$price_prefix .'</span>'. $price_html;
-			}
-			if ( $price_suffix ) {
-				$price_html = $price_html .'<span class="suffix-text additional-text">'. $price_suffix.'</span>';
-			}
-		}
 		return apply_filters( 'wp-cardealer-get-price-html', $price_html, $this->post_id, $this );
 	}
 }

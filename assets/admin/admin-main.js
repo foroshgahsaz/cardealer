@@ -283,6 +283,80 @@
 
             var users_requires_approval = $('#users_requires_approval').val();
             self.show_hide_phone_fields(users_requires_approval);
+
+            self.navasanTest();
+
+            self.speedProbe();
+        },
+        speedProbe: function() {
+            var $button = $('#wp-cardealer-speed-probe');
+            if ( ! $button.length ) {
+                return;
+            }
+
+            $button.on('click', function(event) {
+                event.preventDefault();
+
+                var $result = $('.wp-cardealer-speed-probe-result');
+                var $report = $('.wp-cardealer-speed-probe-report');
+
+                $button.prop('disabled', true);
+                $report.hide().text('');
+                $result.css('color', '').text('در حال اندازه‌گیری صفحهٔ اول... این کار تا دو دقیقه طول می‌کشد.');
+
+                $.post(wp_cardealer_opts.ajaxurl, {
+                    action: 'wp_cardealer_speed_probe',
+                    nonce: wp_cardealer_opts.speed_probe_nonce
+                }).done(function(response) {
+                    if ( response && response.success && response.data ) {
+                        $result.css('color', '#008a20').text(response.data.message);
+                        if ( response.data.report ) {
+                            $report.text(response.data.report).show();
+                        }
+                    } else {
+                        var message = (response && response.data && response.data.message) ? response.data.message : 'اندازه‌گیری ناموفق بود.';
+                        $result.css('color', '#d63638').text(message);
+                    }
+                }).fail(function() {
+                    $result.css('color', '#d63638').text('اندازه‌گیری ناموفق بود.');
+                }).always(function() {
+                    $button.prop('disabled', false);
+                });
+            });
+        },
+        navasanTest: function() {
+            var $button = $('#wp-cardealer-navasan-test');
+            if ( ! $button.length ) {
+                return;
+            }
+
+            $button.on('click', function(event) {
+                event.preventDefault();
+                var $result = $('.wp-cardealer-navasan-test-result');
+                var apiKey = $('#navasan_api_key').val() || '';
+                var item = $('#navasan_usd_item').val() || 'USD';
+
+                $button.prop('disabled', true);
+                $result.removeClass('notice-success notice-error').text( wp_cardealer_opts.navasan_testing || 'در حال آزمایش اتصال...' );
+
+                $.post(wp_cardealer_opts.ajaxurl, {
+                    action: 'wp_cardealer_navasan_test_token',
+                    nonce: wp_cardealer_opts.navasan_nonce,
+                    api_key: apiKey,
+                    item: item
+                }).done(function(response) {
+                    if ( response && response.success && response.data ) {
+                        $result.css('color', '#008a20').text(response.data.message);
+                    } else {
+                        var message = (response && response.data && response.data.message) ? response.data.message : 'درخواست ناموفق بود.';
+                        $result.css('color', '#d63638').text(message);
+                    }
+                }).fail(function() {
+                    $result.css('color', '#d63638').text('درخواست ناموفق بود.');
+                }).always(function() {
+                    $button.prop('disabled', false);
+                });
+            });
         },
         show_hide_phone_fields: function(val) {
             if ( val == 'phone_approve' ) {

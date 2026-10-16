@@ -50,6 +50,7 @@ class WP_CarDealer_Settings {
 		//Custom CMB2 Settings Fields
 		add_action( 'cmb2_render_wp_cardealer_title', 'wp_cardealer_title_callback', 10, 5 );
 		add_action( 'cmb2_render_wp_cardealer_hidden', 'wp_cardealer_hidden_callback', 10, 5 );
+		add_action( 'cmb2_render_wp_cardealer_navasan_status', 'wp_cardealer_navasan_status_callback', 10, 5 );
 
 		add_action( "cmb2_save_options-page_fields", array( $this, 'settings_notices' ), 10, 3 );
 
@@ -348,6 +349,85 @@ class WP_CarDealer_Settings {
 				                ),
 							),
 						),
+					),
+					array(
+						'name' => 'تبدیل دلار به تومان',
+						'desc' => sprintf( 'قیمت آگهی را به دلار وارد کنید. سایت همان مبلغ را با نرخ زنده <a href="%s" target="_blank" rel="noopener noreferrer">وب‌سرویس طلا و ارز</a> به تومان نشان می‌دهد. قالب نیاز به تغییر ندارد.', 'https://brsapi.ir/free-api-gold-currency-webservice/' ),
+						'type' => 'wp_cardealer_title',
+						'id'   => 'wp_cardealer_title_general_settings_navasan',
+						'before_row' => '<hr>',
+						'after_row'  => '<hr>'
+					),
+					array(
+						'name'    => 'فعال‌سازی تبدیل دلار به تومان',
+						'id'      => 'enable_usd_to_toman',
+						'type'    => 'select',
+						'options' => array(
+							'yes' => 'بله',
+							'no'  => 'خیر',
+						),
+						'default' => 'yes',
+						'desc'    => 'با روشن بودن این گزینه، مبلغی که در آگهی می‌زنید دلار است و بازدیدکننده تومان می‌بیند.',
+					),
+					array(
+						'name' => 'کلید وب‌سرویس طلا و ارز',
+						'id'   => 'navasan_api_key',
+						'type' => 'text',
+						'desc' => sprintf( 'کلید دریافتی از وب‌سرویس را اینجا بگذارید. راهنما: <a href="%s" target="_blank" rel="noopener noreferrer">سرویس قیمت طلا و ارز</a>.', 'https://brsapi.ir/free-api-gold-currency-webservice/' ),
+						'attributes' => array(
+							'placeholder' => 'کلید وب‌سرویس',
+							'autocomplete' => 'off',
+						),
+					),
+					array(
+						'name'    => 'منبع نرخ دلار',
+						'id'      => 'navasan_usd_item',
+						'type'    => 'select',
+						'options' => WP_CarDealer_Navasan::get_usd_item_options(),
+						'default' => 'USD',
+						'desc'    => 'دلار آمریکا همان نرخ بازار آزاد است. تتر نرخ دلار تتر است.',
+					),
+					array(
+						'name'    => 'بازهٔ به‌روزرسانی نرخ (دقیقه)',
+						'id'      => 'navasan_cache_minutes',
+						'type'    => 'text_small',
+						'default' => '60',
+						'desc'    => 'نرخ برای هر آگهی جداگانه گرفته نمی‌شود. یک‌بار از وب‌سرویس خوانده می‌شود و تا این مدت (حداقل ۵ دقیقه) برای همهٔ آگهی‌ها استفاده می‌گردد. ویرایش آگهی هم درخواست جدید نمی‌فرستد، مگر کش تمام شده باشد.',
+						'attributes' => array(
+							'type'    => 'number',
+							'min'     => 5,
+							'max'     => 1440,
+							'pattern' => '\d*',
+						),
+					),
+					array(
+						'name'    => 'جایگاه نوشتهٔ تومان',
+						'id'      => 'navasan_currency_position',
+						'type'    => 'select',
+						'options' => array(
+							'after_space'  => 'بعد از عدد با فاصله — ۱۰ تومان',
+							'after'        => 'بعد از عدد بدون فاصله — ۱۰تومان',
+							'before_space' => 'قبل از عدد با فاصله — تومان ۱۰',
+							'before'       => 'قبل از عدد بدون فاصله — تومان۱۰',
+						),
+						'default' => 'after_space',
+					),
+					array(
+						'name'    => 'نمایش قیمت در سایت',
+						'id'      => 'navasan_frontend_convert',
+						'type'    => 'select',
+						'options' => array(
+							'client' => 'سریع — تبدیل در مرورگر (توصیه‌شده)',
+							'server' => 'تبدیل در سرور (کندتر، بدون JavaScript)',
+						),
+						'default' => 'client',
+						'desc'    => 'حالت «سریع» بار PHP صفحه را مثل حالت خاموش نگه می‌دارد؛ تومان در مرورگر نمایش داده می‌شود.',
+					),
+					array(
+						'name' => 'وضعیت اتصال وب‌سرویس',
+						'id'   => 'navasan_connection_status',
+						'type' => 'wp_cardealer_navasan_status',
+						'save_field' => false,
 					),
 					///////
 					array(
@@ -1875,6 +1955,10 @@ $WP_CarDealer_Settings = new WP_CarDealer_Settings();
 function wp_cardealer_get_option( $key = '', $default = false ) {
 	global $wp_cardealer_options;
 
+	if ( class_exists( 'WP_CarDealer_Profiler' ) ) {
+		WP_CarDealer_Profiler::count( 'wp_cardealer_get_option' );
+	}
+
 	$wp_cardealer_options = wp_cardealer_get_settings();
 	
 	$value = ! empty( $wp_cardealer_options[ $key ] ) ? $wp_cardealer_options[ $key ] : $default;
@@ -1894,8 +1978,44 @@ function wp_cardealer_get_option( $key = '', $default = false ) {
  * @return array WP_CarDealer settings
  */
 function wp_cardealer_get_settings() {
-	return apply_filters( 'wp_cardealer_get_settings', get_option( 'wp_cardealer_settings' ) );
+	static $settings = null;
+
+	if ( null === $settings || wp_cardealer_settings_cache_is_stale() ) {
+		$settings = apply_filters( 'wp_cardealer_get_settings', get_option( 'wp_cardealer_settings' ) );
+	}
+
+	return $settings;
 }
+
+/**
+ * Settings are read on nearly every rendered price, so they are cached for the
+ * request. Saving the settings screen must not serve the stale copy back.
+ *
+ * @return bool
+ */
+function wp_cardealer_settings_cache_is_stale() {
+	static $generation = 0;
+
+	$current = (int) apply_filters( 'wp_cardealer_settings_cache_generation', $GLOBALS['wp_cardealer_settings_generation'] ?? 0 );
+
+	if ( $current === $generation ) {
+		return false;
+	}
+
+	$generation = $current;
+
+	return true;
+}
+
+/**
+ * @return void
+ */
+function wp_cardealer_flush_settings_cache() {
+	$GLOBALS['wp_cardealer_settings_generation'] = ( $GLOBALS['wp_cardealer_settings_generation'] ?? 0 ) + 1;
+}
+add_action( 'update_option_wp_cardealer_settings', 'wp_cardealer_flush_settings_cache' );
+add_action( 'add_option_wp_cardealer_settings', 'wp_cardealer_flush_settings_cache' );
+add_action( 'delete_option_wp_cardealer_settings', 'wp_cardealer_flush_settings_cache' );
 
 
 /**
@@ -1929,6 +2049,61 @@ function wp_cardealer_hidden_callback( $field_object, $escaped_value, $object_id
 	if ( $field_description ) {
 		echo '<div class="desc">'.$field_description.'</div>';
 	}
+}
+
+function wp_cardealer_navasan_status_callback( $field_object, $escaped_value, $object_id, $object_type, $field_type_object ) {
+	$last = class_exists( 'WP_CarDealer_Navasan' ) ? WP_CarDealer_Navasan::get_last_result() : array();
+	$rate = ! empty( $last['rate'] ) ? $last['rate'] : '';
+	$date = ! empty( $last['date'] ) ? $last['date'] : '';
+	$fetched_at = ! empty( $last['fetched_at'] ) ? $last['fetched_at'] : '';
+	$item = ! empty( $last['item'] ) ? $last['item'] : 'USD';
+	$item_label = class_exists( 'WP_CarDealer_Navasan' ) ? WP_CarDealer_Navasan::get_usd_item_label( $item ) : 'دلار آمریکا';
+
+	echo '<div class="wp-cardealer-navasan-status">';
+	if ( $rate ) {
+		echo '<p class="wp-cardealer-navasan-rate-line"><strong>آخرین نرخ ذخیره‌شده:</strong> ';
+		echo esc_html( number_format_i18n( $rate ) ) . ' تومان به‌ازای هر ۱ دلار';
+		echo ' (' . esc_html( $item_label ) . ')</p>';
+		if ( $date || $fetched_at ) {
+			echo '<p class="description">';
+			if ( $date ) {
+				echo 'زمان نرخ در وب‌سرویس: ' . esc_html( $date ) . ' ';
+			}
+			if ( $fetched_at ) {
+				echo 'زمان دریافت در سایت: ' . esc_html( $fetched_at );
+			}
+			echo '</p>';
+		}
+	} else {
+		echo '<p class="description">هنوز نرخی ذخیره نشده است. تنظیمات را ذخیره کنید و دکمهٔ زیر را برای آزمایش اتصال بزنید.</p>';
+	}
+
+	echo '<p><button type="button" class="button" id="wp-cardealer-navasan-test">آزمایش کلید و به‌روزرسانی نرخ</button></p>';
+	echo '<p class="wp-cardealer-navasan-test-result" role="status"></p>';
+
+	echo '<hr><p><strong>سنجش سرعت صفحهٔ اول</strong></p>';
+	echo '<p><button type="button" class="button" id="wp-cardealer-speed-probe">اندازه‌گیری سرعت صفحهٔ اول</button></p>';
+	echo '<p class="wp-cardealer-speed-probe-result" role="status"></p>';
+	echo '<pre class="wp-cardealer-speed-probe-report" style="display:none;white-space:pre-wrap;background:#f6f7f7;padding:10px;border:1px solid #dcdcde;max-width:900px;overflow:auto;"></pre>';
+
+	if ( class_exists( 'WP_CarDealer_Navasan' ) && WP_CarDealer_Navasan::BUILD ) {
+		echo '<p class="description">نسخهٔ ماژول نرخ: ' . esc_html( WP_CarDealer_Navasan::BUILD ) . '</p>';
+	}
+
+	if ( class_exists( 'WP_CarDealer_Cron_Repair' ) ) {
+		$cron_report = WP_CarDealer_Cron_Repair::get_last_report();
+		$cron_bytes  = WP_CarDealer_Cron_Repair::get_option_bytes();
+
+		echo '<p class="description">حجم فعلی جدول زمان‌بندی وردپرس: ' . esc_html( number_format_i18n( $cron_bytes ) ) . ' بایت</p>';
+
+		if ( ! empty( $cron_report['ran_at'] ) ) {
+			echo '<p class="description">پاک‌سازی زمان‌بندی در ' . esc_html( $cron_report['ran_at'] ) . ' انجام شد: ';
+			echo esc_html( number_format_i18n( (int) $cron_report['removed_events'] ) ) . ' رکورد حذف شد، ';
+			echo 'حجم از ' . esc_html( number_format_i18n( (int) $cron_report['bytes_before'] ) ) . ' به ';
+			echo esc_html( number_format_i18n( (int) $cron_report['bytes_after'] ) ) . ' بایت رسید.</p>';
+		}
+	}
+	echo '</div>';
 }
 
 function wp_cardealer_cmb2_get_page_options( $query_args, $force = false ) {

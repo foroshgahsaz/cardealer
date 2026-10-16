@@ -283,9 +283,6 @@ class WP_CarDealer_Custom_Fields {
 		    } elseif ( $prefix == WP_CARDEALER_DEALER_PREFIX ) {
 		    	$available_types = WP_CarDealer_Fields_Manager::get_dealer_all_types_fields_available();
 		        $required_types = WP_CarDealer_Fields_Manager::get_dealer_all_types_fields_required();
-		    } elseif ( $prefix == WP_CARDEALER_USER_PREFIX ) {
-		    	$available_types = WP_CarDealer_Fields_Manager::get_user_all_types_fields_available();
-		        $required_types = WP_CarDealer_Fields_Manager::get_user_all_types_fields_required();
 		    }
 			$i = 1;
 
@@ -374,7 +371,7 @@ class WP_CarDealer_Custom_Fields {
 						}
 					}
 
-					if ( !in_array($fieldkey, array( $prefix.'heading', $prefix.'featured_image', $prefix.'gallery', $prefix.'description', $prefix.'expiry_date', $prefix.'price_prefix', $prefix.'price_suffix', $prefix.'price_custom', $prefix.'lot_dimensions', $prefix.'video', $prefix.'map_location', $prefix.'featured_image', $prefix.'gallery', $prefix.'attachments', $prefix.'address', $prefix.'file' )) ) {
+					if ( !in_array($fieldkey, array( $prefix.'heading', $prefix.'featured_image', $prefix.'gallery', $prefix.'description', $prefix.'expiry_date', $prefix.'price_prefix', $prefix.'price_suffix', $prefix.'price_custom', $prefix.'import_fee', $prefix.'body_damage', $prefix.'lot_dimensions', $prefix.'video', $prefix.'map_location', $prefix.'featured_image', $prefix.'gallery', $prefix.'attachments', $prefix.'address', $prefix.'file' )) ) {
 
 						$id = str_replace($prefix, '', $field_data['id']);
 						$fields[$id] = self::render_field($field_data, $fieldkey, $fieldtype, $i, $admin_field, $fieldtype_type);
@@ -480,6 +477,7 @@ class WP_CarDealer_Custom_Fields {
 		        $required_types = WP_CarDealer_Fields_Manager::get_user_all_types_fields_required();
 		    }
 			$i = 1;
+			$seen_body_damage_field = false;
 			foreach ($custom_all_fields as $key => $custom_field) {
 				$check_package_field = true;
 				if ( $prefix == WP_CARDEALER_LISTING_PREFIX && !$admin_field ) {
@@ -501,6 +499,17 @@ class WP_CarDealer_Custom_Fields {
 						$fieldkey = isset($custom_field['key']) ? $custom_field['key'] : '';
 						$fieldtype = isset($custom_field['type']) ? $custom_field['type'] : '';
 						$field_data = $custom_field;
+					} else {
+						$field_data = $custom_field;
+						$fieldtype  = $fieldkey;
+					}
+
+					if ( $prefix === WP_CARDEALER_LISTING_PREFIX && WP_CarDealer_Fields_Manager::field_matches_body_damage_field( $fieldkey, isset( $field_data['id'] ) ? $field_data['id'] : '', WP_CARDEALER_LISTING_PREFIX . 'body_damage' ) ) {
+						if ( $seen_body_damage_field ) {
+							$i++;
+							continue;
+						}
+						$seen_body_damage_field = true;
 					}
 					
 					if ( !$admin_field && (!empty($field_data['show_in_submit_form']) || $fieldtype == 'heading') && $fieldkey !== $prefix.'featured' ) {
@@ -840,16 +849,20 @@ class WP_CarDealer_Custom_Fields {
 				}
 			break;
 			case $prefix.'location':
-				$field['taxonomy'] = !empty($field_data['taxonomy']) ? $field_data['taxonomy'] : '';
-				$location_type = wp_cardealer_get_option('location_multiple_fields', 'yes');
-				
-				if ( $location_type === 'yes' ) {
-					$field['type'] = 'wpcd_taxonomy_location';
-				} else {
-					$field['type'] = 'pw_taxonomy_select';
+				$field['taxonomy'] = ! empty( $field_data['taxonomy'] ) ? $field_data['taxonomy'] : 'listing_location';
+				$field['type'] = 'wpcd_taxonomy_location';
+				$field['name'] = '';
+				$field['classes'] = 'wpcd-location-field-row';
+				if ( empty( $field['attributes'] ) || ! is_array( $field['attributes'] ) ) {
+					$field['attributes'] = array();
 				}
-				// $field['type'] = !empty($field_data['type']) ? $field_data['type'] : 'pw_taxonomy_select';
-			break;
+				$field['attributes']['placeholder'] = ! empty( $field['placeholder'] ) ? $field['placeholder'] : 'شهر را انتخاب کنید…';
+				break;
+			case $prefix.'body_damage':
+				$field['type'] = 'wpcd_body_damage';
+				$field['name'] = '';
+				$field['classes'] = 'wpcd-body-damage-field-row';
+				break;
 			case $prefix.'type':
 			case $prefix.'make':
 				$field['type'] = !empty($field_data['select_type']) ? $field_data['select_type'] : 'pw_taxonomy_select';
@@ -904,6 +917,18 @@ class WP_CarDealer_Custom_Fields {
 					$field['default'] = $userdata->user_url;
 					break;
 			}
+		}
+
+		if ( class_exists( 'WP_CarDealer_Price' ) && WP_CarDealer_Price::is_listing_fee_field( $id ) ) {
+			$field['type'] = 'text';
+			$field['sanitization_cb'] = array( 'WP_CarDealer_Price', 'sanitize_usd_amount' );
+			if ( empty( $field['attributes'] ) || ! is_array( $field['attributes'] ) ) {
+				$field['attributes'] = array();
+			}
+			$field['attributes']['type'] = 'number';
+			$field['attributes']['min'] = 0;
+			$field['attributes']['step'] = '1';
+			$field['attributes']['inputmode'] = 'numeric';
 		}
 
 		return apply_filters( 'wp-cardealer-types-render_field', $field, $field_data, $fieldkey, $fieldtype, $priority);

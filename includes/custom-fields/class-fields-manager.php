@@ -16,6 +16,11 @@ class WP_CarDealer_Fields_Manager {
 	public static function init() {
         add_action( 'admin_menu', array( __CLASS__, 'register_page' ), 1 );
         add_action( 'init', array(__CLASS__, 'init_hook'), 10 );
+        add_filter( 'wp-cardealer-get-custom-fields-data', array( __CLASS__, 'inject_listing_fee_fields' ), 200, 2 );
+        add_filter( 'wp-cardealer-get-custom-fields-data', array( __CLASS__, 'inject_listing_location_fields' ), 210, 2 );
+        add_filter( 'wp-cardealer-get-custom-fields-data', array( __CLASS__, 'inject_listing_body_damage_fields' ), 220, 2 );
+        add_filter( 'wp-cardealer-get-custom-fields-data', array( __CLASS__, 'dedupe_listing_body_damage_fields' ), 230, 2 );
+        add_filter( 'wp_cardealer_list_simple_type', array( __CLASS__, 'add_listing_fee_simple_types' ) );
 	}
 
     public static function register_page() {
@@ -158,7 +163,7 @@ class WP_CarDealer_Fields_Manager {
                                         if ( in_array( $fieldtype, $dtypes) ) {
                                             $output .= apply_filters('wp_cardealer_custom_field_available_simple_html', $fieldtype, $count_node, $field_values);
 
-                                        } elseif ( in_array( $fieldtype, apply_filters( 'wp_cardealer_list_tax_type', array( $prefix.'condition', $prefix.'label', $prefix.'category', $prefix.'type', $prefix.'color', $prefix.'cylinder', $prefix.'door', $prefix.'drive_type', $prefix.'fuel_type', $prefix.'make', $prefix.'model', $prefix.'offer_type', $prefix.'transmission' ) ) ) ) {
+                                        } elseif ( in_array( $fieldtype, apply_filters( 'wp_cardealer_list_tax_type', array( $prefix.'condition', $prefix.'label', $prefix.'category', $prefix.'type', $prefix.'color', $prefix.'cylinder', $prefix.'door', $prefix.'drive_type', $prefix.'fuel_type', $prefix.'location', $prefix.'make', $prefix.'model', $prefix.'offer_type', $prefix.'transmission' ) ) ) ) {
                                             
                                             $output .= apply_filters('wp_cardealer_custom_field_available_tax_html', $fieldtype, $count_node, $field_values);
 
@@ -426,9 +431,25 @@ class WP_CarDealer_Fields_Manager {
                 'name'              => __( 'Price', 'wp-cardealer' ),
                 'id'                => $prefix . 'price',
                 'type'              => 'text',
-                'placeholder'       => __( 'e.g. 1000', 'wp-cardealer' ),
+                'placeholder'       => 'مثال: ۲۵۰۰۰ (دلار)',
+                'desc'              => 'قیمت را به دلار آمریکا وارد کنید. سایت همین مبلغ را با نرخ زنده وب‌سرویس طلا و ارز به تومان نشان می‌دهد.',
                 'field_call_back' => array( 'WP_CarDealer_Abstract_Filter', 'filter_field_listing_price'),
                 'show_compare'      => true
+            ),
+            array(
+                'name'              => 'هزینه واردات',
+                'id'                => $prefix . 'import_fee',
+                'type'              => 'text',
+                'placeholder'       => 'مثال: ۵۰۰۰ (دلار)',
+                'desc'              => 'مبلغ را به دلار آمریکا وارد کنید (گمرک و حمل‌ونقل). سایت همان مبلغ را با نرخ زنده به تومان زیر قیمت آگهی نشان می‌دهد.',
+                'description'       => 'مبلغ را به دلار آمریکا وارد کنید (گمرک و حمل‌ونقل). سایت همان مبلغ را با نرخ زنده به تومان زیر قیمت آگهی نشان می‌دهد.',
+                'attributes'        => array(
+                    'type'      => 'number',
+                    'min'       => 0,
+                    'step'      => '1',
+                    'inputmode' => 'numeric',
+                ),
+                'show_compare'      => false,
             ),
             array(
                 'name'              => __( 'Price Prefix', 'wp-cardealer' ),
@@ -572,6 +593,15 @@ class WP_CarDealer_Fields_Manager {
                 'taxonomy'          => 'listing_fuel_type',
                 'field_call_back' => array( 'WP_CarDealer_Abstract_Filter', 'filter_field_taxonomy_hierarchical_check_list'),
                 'show_compare'      => true
+            ),
+            array(
+                'name'              => 'موقعیت',
+                'id'                => $prefix . 'location',
+                'type'              => 'wpcd_taxonomy_location',
+                'taxonomy'          => 'listing_location',
+                'description'       => 'شهر و زیرمجموعه را انتخاب کنید. این فیلد جدا از آدرس متنی و نقشه است.',
+                'field_call_back' => array( 'WP_CarDealer_Abstract_Filter', 'filter_field_location_select'),
+                'show_compare'      => true,
             ),
             array(
                 'name'              => __( 'Make', 'wp-cardealer' ),
@@ -796,6 +826,406 @@ class WP_CarDealer_Fields_Manager {
         return apply_filters( 'wp-cardealer-user-type-available-fields', $fields );
     }
 
+    /**
+     * Field configs injected into saved Fields Manager data so existing sites
+     * get the import fee input next to Price without a manual Fields Manager save.
+     *
+     * @return array
+     */
+    public static function get_listing_fee_field_configs() {
+        $prefix = WP_CARDEALER_LISTING_PREFIX;
+
+        return array(
+            array(
+                'type'                => $prefix . 'import_fee',
+                'id'                  => $prefix . 'import_fee',
+                'name'                => 'هزینه واردات',
+                'placeholder'         => 'مثال: ۵۰۰۰ (دلار)',
+                'description'         => 'مبلغ را به دلار آمریکا وارد کنید (گمرک و حمل‌ونقل). سایت همان مبلغ را با نرخ زنده به تومان زیر قیمت آگهی نشان می‌دهد.',
+                'show_in_submit_form' => 'yes',
+                'show_in_admin_edit'  => 'yes',
+                'required'            => '',
+            ),
+        );
+    }
+
+    /**
+     * Treat fee keys as simple available fields in Fields Manager.
+     *
+     * @param array $types
+     * @return array
+     */
+    public static function add_listing_fee_simple_types( $types ) {
+        if ( ! is_array( $types ) ) {
+            $types = array();
+        }
+
+        $prefix = WP_CARDEALER_LISTING_PREFIX;
+        foreach ( array( 'import_fee' ) as $suffix ) {
+            $id = $prefix . $suffix;
+            if ( ! in_array( $id, $types, true ) ) {
+                $types[] = $id;
+            }
+        }
+
+        return $types;
+    }
+
+    /**
+     * Insert fee fields after Price in already-saved field layouts.
+     *
+     * @param mixed  $fields
+     * @param string $prefix
+     * @return mixed
+     */
+    public static function inject_listing_fee_fields( $fields, $prefix = '' ) {
+        if ( $prefix && $prefix !== WP_CARDEALER_LISTING_PREFIX ) {
+            return $fields;
+        }
+
+        if ( empty( $fields ) || ! is_array( $fields ) ) {
+            return $fields;
+        }
+
+        $legacy_fee_ids = array(
+            WP_CARDEALER_LISTING_PREFIX . 'customs_fee',
+            WP_CARDEALER_LISTING_PREFIX . 'shipping_fee',
+        );
+        $fields         = array_values(
+            array_filter(
+                $fields,
+                function ( $field ) use ( $legacy_fee_ids ) {
+                    if ( ! is_array( $field ) ) {
+                        return true;
+                    }
+                    $type = isset( $field['type'] ) ? $field['type'] : '';
+                    $id   = isset( $field['id'] ) ? $field['id'] : '';
+
+                    return ! in_array( $type, $legacy_fee_ids, true ) && ! in_array( $id, $legacy_fee_ids, true );
+                }
+            )
+        );
+
+        $new_fields = self::get_listing_fee_field_configs();
+        $missing    = array();
+
+        foreach ( $new_fields as $config ) {
+            if ( ! self::saved_fields_contain( $fields, $config['type'] ) ) {
+                $missing[] = $config;
+            }
+        }
+
+        if ( empty( $missing ) ) {
+            return $fields;
+        }
+
+        $result     = array();
+        $inserted   = false;
+        $price_id   = WP_CARDEALER_LISTING_PREFIX . 'price';
+
+        foreach ( $fields as $field ) {
+            $result[] = $field;
+            if ( $inserted || ! is_array( $field ) ) {
+                continue;
+            }
+            $type = isset( $field['type'] ) ? $field['type'] : '';
+            $id   = isset( $field['id'] ) ? $field['id'] : '';
+            if ( $type === $price_id || $id === $price_id ) {
+                foreach ( $missing as $config ) {
+                    $result[] = $config;
+                }
+                $inserted = true;
+            }
+        }
+
+        if ( ! $inserted ) {
+            foreach ( $missing as $config ) {
+                $result[] = $config;
+            }
+        }
+
+        return $result;
+    }
+
+    /**
+     * Inject the «موقعیت» tab heading + location field into saved Fields Manager data.
+     *
+     * @param mixed  $fields
+     * @param string $prefix
+     * @return mixed
+     */
+    public static function inject_listing_location_fields( $fields, $prefix = '' ) {
+        if ( $prefix && $prefix !== WP_CARDEALER_LISTING_PREFIX ) {
+            return $fields;
+        }
+
+        if ( empty( $fields ) || ! is_array( $fields ) ) {
+            return $fields;
+        }
+
+        $location_id = WP_CARDEALER_LISTING_PREFIX . 'location';
+        $heading_id  = WP_CARDEALER_LISTING_PREFIX . 'heading_location';
+
+        if ( self::saved_fields_contain( $fields, $location_id ) ) {
+            return $fields;
+        }
+
+        $block = self::get_listing_location_field_configs();
+        $result = array();
+        $inserted = false;
+        $anchor_id = WP_CARDEALER_LISTING_PREFIX . 'map_location';
+
+        foreach ( $fields as $field ) {
+            $result[] = $field;
+            if ( $inserted || ! is_array( $field ) ) {
+                continue;
+            }
+            $type = isset( $field['type'] ) ? $field['type'] : '';
+            $id   = isset( $field['id'] ) ? $field['id'] : '';
+            if ( $type === $anchor_id || $id === $anchor_id || $type === WP_CARDEALER_LISTING_PREFIX . 'address' || $id === WP_CARDEALER_LISTING_PREFIX . 'address' ) {
+                foreach ( $block as $config ) {
+                    $result[] = $config;
+                }
+                $inserted = true;
+            }
+        }
+
+        if ( ! $inserted ) {
+            foreach ( $block as $config ) {
+                $result[] = $config;
+            }
+        }
+
+        return $result;
+    }
+
+    /**
+     * @return array
+     */
+    public static function get_listing_location_field_configs() {
+        $prefix = WP_CARDEALER_LISTING_PREFIX;
+
+        return array(
+            array(
+                'type'                => 'heading',
+                'id'                  => $prefix . 'heading_location',
+                'name'                => 'موقعیت',
+                'icon'                => 'dashicons-location-alt',
+                'show_in_submit_form' => 'yes',
+                'show_in_admin_edit'  => 'yes',
+            ),
+            array(
+                'type'                => $prefix . 'location',
+                'id'                  => $prefix . 'location',
+                'name'                => '',
+                'taxonomy'            => 'listing_location',
+                'description'         => 'شهر و زیرمجموعه را انتخاب کنید. این فیلد جدا از آدرس متنی و نقشه است.',
+                'show_in_submit_form' => 'yes',
+                'show_in_admin_edit'  => 'yes',
+                'required'            => '',
+            ),
+        );
+    }
+
+    /**
+     * Inject the «رنگ‌شدگی» tab after location fields.
+     *
+     * @param mixed  $fields
+     * @param string $prefix
+     * @return mixed
+     */
+    public static function inject_listing_body_damage_fields( $fields, $prefix = '' ) {
+        if ( $prefix && $prefix !== WP_CARDEALER_LISTING_PREFIX ) {
+            return $fields;
+        }
+
+        if ( empty( $fields ) || ! is_array( $fields ) ) {
+            return $fields;
+        }
+
+        if ( self::saved_fields_contain_body_damage( $fields ) ) {
+            return $fields;
+        }
+
+        $block     = self::get_listing_body_damage_field_configs();
+        $result    = array();
+        $inserted  = false;
+        $anchor_id = WP_CARDEALER_LISTING_PREFIX . 'location';
+
+        foreach ( $fields as $field ) {
+            $result[] = $field;
+            if ( $inserted || ! is_array( $field ) ) {
+                continue;
+            }
+            $type = isset( $field['type'] ) ? $field['type'] : '';
+            $id   = isset( $field['id'] ) ? $field['id'] : '';
+            if ( $type === $anchor_id || $id === $anchor_id ) {
+                foreach ( $block as $config ) {
+                    $result[] = $config;
+                }
+                $inserted = true;
+            }
+        }
+
+        if ( ! $inserted ) {
+            foreach ( $block as $config ) {
+                $result[] = $config;
+            }
+        }
+
+        return $result;
+    }
+
+    /**
+     * Remove duplicate «رنگ‌شدگی» heading/field rows from saved Fields Manager data.
+     *
+     * @param mixed  $fields
+     * @param string $prefix
+     * @return mixed
+     */
+    public static function dedupe_listing_body_damage_fields( $fields, $prefix = '' ) {
+        if ( $prefix && $prefix !== WP_CARDEALER_LISTING_PREFIX ) {
+            return $fields;
+        }
+
+        if ( empty( $fields ) || ! is_array( $fields ) ) {
+            return $fields;
+        }
+
+        $heading_id = WP_CARDEALER_LISTING_PREFIX . 'heading_body_damage';
+        $field_id   = WP_CARDEALER_LISTING_PREFIX . 'body_damage';
+        $seen       = array(
+            'heading' => false,
+            'field'   => false,
+        );
+        $result     = array();
+
+        foreach ( $fields as $field ) {
+            if ( ! is_array( $field ) ) {
+                $result[] = $field;
+                continue;
+            }
+
+            $type = isset( $field['type'] ) ? $field['type'] : '';
+            $id   = isset( $field['id'] ) ? $field['id'] : '';
+
+            if ( self::field_matches_body_damage_heading( $type, $id, $heading_id ) ) {
+                if ( $seen['heading'] ) {
+                    continue;
+                }
+                $seen['heading'] = true;
+            } elseif ( self::field_matches_body_damage_field( $type, $id, $field_id ) ) {
+                if ( $seen['field'] ) {
+                    continue;
+                }
+                $seen['field'] = true;
+            }
+
+            $result[] = $field;
+        }
+
+        return $result;
+    }
+
+    /**
+     * @param array $fields
+     * @return bool
+     */
+    public static function saved_fields_contain_body_damage( $fields ) {
+        if ( empty( $fields ) || ! is_array( $fields ) ) {
+            return false;
+        }
+
+        $heading_id = WP_CARDEALER_LISTING_PREFIX . 'heading_body_damage';
+        $field_id   = WP_CARDEALER_LISTING_PREFIX . 'body_damage';
+        $has_field  = false;
+
+        foreach ( $fields as $field ) {
+            if ( ! is_array( $field ) ) {
+                continue;
+            }
+            $type = isset( $field['type'] ) ? $field['type'] : '';
+            $id   = isset( $field['id'] ) ? $field['id'] : '';
+            if ( self::field_matches_body_damage_field( $type, $id, $field_id ) ) {
+                $has_field = true;
+                break;
+            }
+        }
+
+        return $has_field;
+    }
+
+    /**
+     * @param string $type
+     * @param string $id
+     * @param string $heading_id
+     * @return bool
+     */
+    public static function field_matches_body_damage_heading( $type, $id, $heading_id ) {
+        return $type === 'heading' && $id === $heading_id;
+    }
+
+    /**
+     * @param string $type
+     * @param string $id
+     * @param string $field_id
+     * @return bool
+     */
+    public static function field_matches_body_damage_field( $type, $id, $field_id ) {
+        return $type === $field_id || $id === $field_id || $type === 'wpcd_body_damage';
+    }
+
+    /**
+     * @return array
+     */
+    public static function get_listing_body_damage_field_configs() {
+        $prefix = WP_CARDEALER_LISTING_PREFIX;
+
+        return array(
+            array(
+                'type'                => 'heading',
+                'id'                  => $prefix . 'heading_body_damage',
+                'name'                => 'رنگ‌شدگی',
+                'icon'                => 'dashicons-art',
+                'show_in_submit_form' => 'no',
+                'show_in_admin_edit'  => 'yes',
+            ),
+            array(
+                'type'                => $prefix . 'body_damage',
+                'id'                  => $prefix . 'body_damage',
+                'name'                => '',
+                'description'         => 'وضعیت رنگ‌شدگی یا تعویض هر قطعه بدنه فلزی را مشخص کنید.',
+                'show_in_submit_form' => 'no',
+                'show_in_admin_edit'  => 'yes',
+                'required'            => '',
+            ),
+        );
+    }
+
+    /**
+     * @param array  $fields
+     * @param string $field_id
+     * @return bool
+     */
+    public static function saved_fields_contain( $fields, $field_id ) {
+        if ( empty( $fields ) || ! is_array( $fields ) ) {
+            return false;
+        }
+
+        foreach ( $fields as $field ) {
+            if ( ! is_array( $field ) ) {
+                continue;
+            }
+            $type = isset( $field['type'] ) ? $field['type'] : '';
+            $id   = isset( $field['id'] ) ? $field['id'] : '';
+            if ( $type === $field_id || $id === $field_id ) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     public static function get_custom_fields_data($prefix) {
         $meta_key = self::get_custom_fields_key($prefix);
         return apply_filters( 'wp-cardealer-get-custom-fields-data', get_option($meta_key, array()), $prefix );
@@ -805,7 +1235,7 @@ class WP_CarDealer_Fields_Manager {
         if ( $prefix == WP_CARDEALER_LISTING_PREFIX ) {
             $prefix = '';
         }
-        return apply_filters( 'wp-cardealer-get-custom-fields-key', 'wp_cardealer'.$prefix.'_fields_data', $prefix );
+        return apply_filters( 'wp-cardealer-get-custom-fields-key', 'wp_cardealer'.$prefix.'_fields_data' );
     }
 
     public static function get_display_hooks() {
@@ -909,7 +1339,7 @@ class WP_CarDealer_Fields_Manager {
                 $html .= apply_filters( 'wp_cardealer_custom_field_available_simple_html', $fieldtype, $global_custom_field_counter, $dfield_values );
 
 
-            } elseif ( in_array( $fieldtype, apply_filters( 'wp_cardealer_list_tax_type', array($prefix.'condition', $prefix.'label', $prefix.'category', $prefix.'type', $prefix.'color', $prefix.'cylinder', $prefix.'door', $prefix.'drive_type', $prefix.'feature', $prefix.'fuel_type', $prefix.'make', $prefix.'model', $prefix.'offer_type', $prefix.'transmission') ) ) ) {
+            } elseif ( in_array( $fieldtype, apply_filters( 'wp_cardealer_list_tax_type', array($prefix.'condition', $prefix.'label', $prefix.'category', $prefix.'type', $prefix.'color', $prefix.'cylinder', $prefix.'door', $prefix.'drive_type', $prefix.'feature', $prefix.'fuel_type', $prefix.'location', $prefix.'make', $prefix.'model', $prefix.'offer_type', $prefix.'transmission') ) ) ) {
                 
                 $html .= apply_filters( 'wp_cardealer_custom_field_available_tax_html', $fieldtype, $global_custom_field_counter, $dfield_values );
 
