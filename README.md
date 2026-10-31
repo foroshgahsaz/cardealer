@@ -1,29 +1,37 @@
-# WP CarDealer (سفارشی freezonescar)
+# WP CarDealer + Freezones (freezonescar)
 
-نسخهٔ به‌روز افزونهٔ WP CarDealer با تمام تغییرات سفارشی پروژه (مخزن قبلی `deal`)، از PR #1 تا #18:
+این مخزن **دو افزونه** دارد:
 
-- تبدیل قیمت دلار → تومان (BrsApi / Navasan)
-- هزینه واردات (دلار)، هزینه کل، تگ‌های Elementor
-- تاکسونومی موقعیت و لینک آرشیو
-- رنگ‌شدگی بدنه (SVG)
-- بهینه‌سازی سرعت صفحهٔ اول (اسلایدر قیمت، سقف فیلتر، بدون cron/API در فرانت)
-- سنجش سرعت از ادمین
+| پوشه | نقش |
+|------|-----|
+| [`wp-cardealer/`](wp-cardealer/) | هستهٔ رسمی **Apus 1.2.20** — از updater خودش به‌روز می‌شود |
+| [`wp-cardealer-freezones/`](wp-cardealer-freezones/) | سفارشی‌های پروژه (Navasan، هزینه واردات، بدنه، موقعیت، Elementor، …) |
 
-## نصب
+## نصب در وردپرس
 
-محتوای این مخزن را در `wp-content/plugins/wp-cardealer/` کپی کنید (شامل `wp-cardealer.php`، `templates/`، `includes/`، …).
+هر دو پوشه را در `wp-content/plugins/` کپی کنید:
 
-بعد از نصب: **تنظیمات → پیوندهای یکتا → ذخیره** و کش سایت را پاک کنید.
+- `wp-content/plugins/wp-cardealer/`
+- `wp-content/plugins/wp-cardealer-freezones/`
 
-مارکر دیپلوی در سورس: `wpcd-navasan-20261011-import-fee`
+**هر دو** را فعال کنید (Freezones به WP CarDealer وابسته است).
 
-## تست
+بعد از نصب یا آپدیت هسته: **تنظیمات → پیوندهای یکتا → ذخیره** و کش را پاک کنید.
+
+## به‌روزرسانی هسته (Apus)
+
+1. نسخهٔ جدید را از پنل وردپرس یا zip رسمی نصب کنید (فقط پوشه `wp-cardealer`).
+2. فایل [`wp-cardealer/UPGRADE-FREEZONES.md`](wp-cardealer/UPGRADE-FREEZONES.md) را بخوانید — چند خط کوچک در `wp-cardealer.php` و `includes/sms/class-sms.php` باید بعد از آپدیت دوباره اعمال شوند.
+3. افزونه **Freezones** را لمس نکنید مگر در changelog breaking باشد.
+
+## تست (افزونه Freezones)
 
 ```bash
-php tests/test-listing-fees.php
+cd wp-cardealer-freezones
 php tests/test-navasan.php
+php tests/test-listing-fees.php
 ```
 
-## منبع تغییرات
+## معماری
 
-این شاخه از `main` مخزن [foroshgahsaz/deal](https://github.com/foroshgahsaz/deal) (تا merge PR #18) روی پایهٔ [foroshgahsaz/cardealer](https://github.com/foroshgahsaz/cardealer) اعمال شده است. فایل‌هایی که فقط در `cardealer` به‌روز بودند (مثلاً `includes/class-user-meta.php`) دست‌نخورده مانده‌اند.
+Freezones فایل‌های override را از مسیر خودش لود می‌کند (`wp_cardealer_freezones_require`). دادهٔ سایت (meta، option، cron) همان کلیدهای قبلی است؛ migration دیتابیس لازم نیست.
